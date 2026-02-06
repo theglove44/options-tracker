@@ -99,9 +99,24 @@ const buildRefreshTokenCandidates = (refreshToken) => {
   return [...candidates];
 };
 
+const buildBaseUrlCandidates = (configuredBaseUrl) => {
+  const normalizedConfigured = normalizeBaseUrl(configuredBaseUrl);
+  const candidates = new Set([normalizedConfigured]);
+
+  if (normalizedConfigured.includes('api.tastytrade.com')) {
+    candidates.add('https://api.tastyworks.com');
+  }
+
+  if (normalizedConfigured.includes('api.tastyworks.com')) {
+    candidates.add('https://api.tastytrade.com');
+  }
+
+  return [...candidates];
+};
+
 const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshToken }) => {
-  const url = new URL('/oauth/token', baseUrl);
-  const callTokenEndpoint = async ({ useBasicAuth, refreshTokenCandidate }) => {
+  const callTokenEndpoint = async ({ oauthBaseUrl, useBasicAuth, refreshTokenCandidate }) => {
+    const url = new URL('/oauth/token', oauthBaseUrl);
     const body = new URLSearchParams();
     body.set('grant_type', 'refresh_token');
     body.set('refresh_token', refreshTokenCandidate);
@@ -113,6 +128,7 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
     const headers = {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'options-tracker-vercel/1.0',
     };
 
     if (useBasicAuth) {
@@ -136,30 +152,42 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
   };
 
   const refreshTokenCandidates = buildRefreshTokenCandidates(refreshToken);
+  const baseUrlCandidates = buildBaseUrlCandidates(baseUrl);
   const failures = [];
 
-  for (const refreshTokenCandidate of refreshTokenCandidates) {
-    const postResult = await callTokenEndpoint({ useBasicAuth: false, refreshTokenCandidate });
-    if (postResult.payload) {
-      const accessToken = postResult.payload?.access_token
-        || postResult.payload?.data?.access_token
-        || postResult.payload?.data?.['access-token'];
-      if (!accessToken) throw new Error('OAuth token response missing access token.');
-      return accessToken;
-    }
+  for (const oauthBaseUrl of baseUrlCandidates) {
+    for (const refreshTokenCandidate of refreshTokenCandidates) {
+      const postResult = await callTokenEndpoint({
+        oauthBaseUrl,
+        useBasicAuth: false,
+        refreshTokenCandidate,
+      });
+      if (postResult.payload) {
+        const accessToken = postResult.payload?.access_token
+          || postResult.payload?.data?.access_token
+          || postResult.payload?.data?.['access-token'];
+        if (!accessToken) throw new Error('OAuth token response missing access token.');
+        return accessToken;
+      }
 
-    const basicResult = await callTokenEndpoint({ useBasicAuth: true, refreshTokenCandidate });
-    if (basicResult.payload) {
-      const accessToken = basicResult.payload?.access_token
-        || basicResult.payload?.data?.access_token
-        || basicResult.payload?.data?.['access-token'];
-      if (!accessToken) throw new Error('OAuth token response missing access token.');
-      return accessToken;
-    }
+      const basicResult = await callTokenEndpoint({
+        oauthBaseUrl,
+        useBasicAuth: true,
+        refreshTokenCandidate,
+      });
+      if (basicResult.payload) {
+        const accessToken = basicResult.payload?.access_token
+          || basicResult.payload?.data?.access_token
+          || basicResult.payload?.data?.['access-token'];
+        if (!accessToken) throw new Error('OAuth token response missing access token.');
+        return accessToken;
+      }
 
-    failures.push(
-      `token_fp=${fingerprint(refreshTokenCandidate)} post_error=${postResult.error} basic_error=${basicResult.error}`,
-    );
+      failures.push(
+        `oauth_base=${oauthBaseUrl} token_fp=${fingerprint(refreshTokenCandidate)} `
+        + `post_error=${postResult.error} basic_error=${basicResult.error}`,
+      );
+    }
   }
 
   throw new Error(
