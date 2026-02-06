@@ -24,13 +24,20 @@ const parseApiError = async (response) => {
     if (payload?.message) return payload.message;
   }
   const text = await response.text().catch(() => '');
-  return text || `HTTP ${response.status}`;
+  if (text) {
+    const titleMatch = text.match(/<title>([^<]+)<\/title>/i);
+    const h1Match = text.match(/<h1>([^<]+)<\/h1>/i);
+    const summary = titleMatch?.[1] || h1Match?.[1];
+    if (summary) return summary.trim();
+  }
+  return `HTTP ${response.status}`;
 };
 
 const requestJson = async (url, options) => {
   const response = await fetch(url, options);
   if (!response.ok) {
-    throw new Error(await parseApiError(response));
+    const parsedMessage = await parseApiError(response);
+    throw new Error(`HTTP ${response.status}: ${parsedMessage}`);
   }
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
@@ -56,22 +63,60 @@ const loadConfig = () => ({
 
 const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshToken }) => {
   const url = new URL('/oauth/token', baseUrl);
-  const body = new URLSearchParams();
-  body.set('grant_type', 'refresh_token');
-  body.set('refresh_token', refreshToken);
-  body.set('client_id', clientId);
-  body.set('client_secret', clientSecret);
+  const callTokenEndpoint = async ({ useBasicAuth }) => {
+    const body = new URLSearchParams();
+    body.set('grant_type', 'refresh_token');
+    body.set('refresh_token', refreshToken);
+    if (!useBasicAuth) {
+      body.set('client_id', clientId);
+      body.set('client_secret', clientSecret);
+    }
 
-  const payload = await requestJson(url.toString(), {
-    method: 'POST',
-    headers: {
+    const headers = {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: body.toString(),
-  });
+    };
 
-  const accessToken = payload?.access_token || payload?.data?.access_token || payload?.data?.['access-token'];
+    if (useBasicAuth) {
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      headers.Authorization = `Basic ${credentials}`;
+    }
+
+    try {
+      const payload = await requestJson(url.toString(), {
+        method: 'POST',
+        headers,
+        body: body.toString(),
+      });
+      return { payload, error: null };
+    } catch (error) {
+      return {
+        payload: null,
+        error: error instanceof Error ? error.message : 'Unknown OAuth token error',
+      };
+    }
+  };
+
+  const postResult = await callTokenEndpoint({ useBasicAuth: false });
+  if (postResult.payload) {
+    const accessToken = postResult.payload?.access_token
+      || postResult.payload?.data?.access_token
+      || postResult.payload?.data?.['access-token'];
+    if (!accessToken) throw new Error('OAuth token response missing access token.');
+    return accessToken;
+  }
+
+  const basicResult = await callTokenEndpoint({ useBasicAuth: true });
+  if (!basicResult.payload) {
+    throw new Error(
+      `OAuth refresh failed using both client auth modes. `
+      + `baseUrl=${baseUrl}. post_error=${postResult.error}. basic_error=${basicResult.error}`,
+    );
+  }
+
+  const accessToken = basicResult.payload?.access_token
+    || basicResult.payload?.data?.access_token
+    || basicResult.payload?.data?.['access-token'];
   if (!accessToken) throw new Error('OAuth token response missing access token.');
   return accessToken;
 };
