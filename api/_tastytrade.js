@@ -4,6 +4,13 @@ import https from 'node:https';
 const DEFAULT_BASE_URL = 'https://api.tastytrade.com';
 const MAX_TRANSACTION_PAGES = 200;
 const TRANSACTION_PAGE_SIZE = 2000;
+const TOKEN_PATH_CANDIDATES = ['/oauth/token', '/oauth2/token'];
+const TOKEN_REQUEST_MODES = [
+  { key: 'json_with_client', contentType: 'application/json', authMode: 'body_client_and_secret' },
+  { key: 'json_secret_only', contentType: 'application/json', authMode: 'body_secret_only' },
+  { key: 'form_with_client', contentType: 'application/x-www-form-urlencoded', authMode: 'body_client_and_secret' },
+  { key: 'form_basic_auth', contentType: 'application/x-www-form-urlencoded', authMode: 'basic_auth' },
+];
 
 const normalizeBaseUrl = (baseUrl) => (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
 
@@ -56,7 +63,7 @@ const parseErrorText = (text = '') => {
   return (titleMatch?.[1] || h1Match?.[1] || text).trim();
 };
 
-const postFormWithHttps = async (url, headers, body) => new Promise((resolve, reject) => {
+const postWithHttps = async (url, headers, body) => new Promise((resolve, reject) => {
   const request = https.request(url, {
     method: 'POST',
     headers: {
@@ -106,11 +113,39 @@ const requireEnv = (name) => {
   return normalized;
 };
 
+const normalizeScopeValue = (value) => {
+  if (!value) return undefined;
+  const normalized = value
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' ');
+  return normalized || undefined;
+};
+
+const parseJwtPayload = (token) => {
+  const parts = token.split('.');
+  if (parts.length < 2 || !parts[1]) return null;
+
+  const base64 = parts[1]
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
+
+  try {
+    const decoded = Buffer.from(base64, 'base64').toString('utf8');
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+};
+
 const loadConfig = () => ({
   baseUrl: normalizeBaseUrl(process.env.TASTYTRADE_API_BASE_URL),
   clientId: requireEnv('TASTYTRADE_CLIENT_ID'),
   clientSecret: requireEnv('TASTYTRADE_CLIENT_SECRET'),
   refreshToken: requireEnv('TASTYTRADE_REFRESH_TOKEN'),
+  oauthScopes: normalizeScopeValue(process.env.TASTYTRADE_OAUTH_SCOPES || ''),
 });
 
 const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
@@ -149,112 +184,182 @@ const buildBaseUrlCandidates = (configuredBaseUrl) => {
   return [...candidates];
 };
 
-const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshToken }) => {
-  const callTokenEndpoint = async ({ oauthBaseUrl, useBasicAuth, refreshTokenCandidate }) => {
-    const url = new URL('/oauth/token', oauthBaseUrl);
-    const body = new URLSearchParams();
-    body.set('grant_type', 'refresh_token');
-    body.set('refresh_token', refreshTokenCandidate);
-    if (!useBasicAuth) {
-      body.set('client_id', clientId);
-      body.set('client_secret', clientSecret);
-    }
+const buildScopeCandidates = ({ configuredScopes, refreshToken }) => {
+  const candidates = new Set();
+  if (configuredScopes) candidates.add(configuredScopes);
 
-    const headers = {
-      Accept: 'application/json',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
+  const payload = parseJwtPayload(refreshToken);
+  const inferredScope = normalizeScopeValue(typeof payload?.scope === 'string' ? payload.scope : '');
+  if (inferredScope) candidates.add(inferredScope);
 
-    if (useBasicAuth) {
-      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-      headers.Authorization = `Basic ${credentials}`;
-    }
+  candidates.add('');
+  return [...candidates];
+};
 
-    try {
-      const response = await postFormWithHttps(url, headers, body.toString());
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        const contentType = String(response.headers['content-type'] || '');
-        let parsedMessage = '';
-        if (contentType.includes('application/json')) {
-          try {
-            const payload = JSON.parse(response.body);
-            parsedMessage = payload?.error?.message
-              || payload?.error_description
-              || payload?.error_code
-              || payload?.message
-              || '';
-          } catch {
-            parsedMessage = '';
-          }
-        }
-        if (!parsedMessage) {
-          parsedMessage = parseErrorText(response.body) || `HTTP ${response.statusCode}`;
-        }
-        throw new Error(`HTTP ${response.statusCode}: ${parsedMessage}`);
-      }
+const getOAuthPayloadAccessToken = (payload) => payload?.access_token
+  || payload?.data?.access_token
+  || payload?.data?.['access-token'];
 
-      let payload = null;
-      try {
-        payload = JSON.parse(response.body);
-      } catch {
-        throw new Error('OAuth token endpoint returned non-JSON success response.');
-      }
-
-      return { payload, error: null };
-    } catch (error) {
-      return {
-        payload: null,
-        error: error instanceof Error ? error.message : 'Unknown OAuth token error',
-      };
-    }
+const buildTokenRequestBody = ({
+  contentType,
+  authMode,
+  refreshTokenCandidate,
+  scopeCandidate,
+  clientId,
+  clientSecret,
+}) => {
+  const tokenRequest = {
+    grant_type: 'refresh_token',
+    refresh_token: refreshTokenCandidate,
   };
+
+  if (scopeCandidate) {
+    tokenRequest.scope = scopeCandidate;
+  }
+
+  if (authMode === 'body_client_and_secret') {
+    tokenRequest.client_id = clientId;
+    tokenRequest.client_secret = clientSecret;
+  } else if (authMode === 'body_secret_only') {
+    tokenRequest.client_secret = clientSecret;
+  }
+
+  if (contentType === 'application/json') {
+    return JSON.stringify(tokenRequest);
+  }
+
+  const body = new URLSearchParams();
+  Object.entries(tokenRequest).forEach(([key, value]) => {
+    body.set(key, value);
+  });
+  return body.toString();
+};
+
+const callTokenEndpoint = async ({
+  oauthBaseUrl,
+  oauthPath,
+  refreshTokenCandidate,
+  scopeCandidate,
+  tokenRequestMode,
+  clientId,
+  clientSecret,
+}) => {
+  const url = new URL(oauthPath, oauthBaseUrl);
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': tokenRequestMode.contentType,
+  };
+
+  if (tokenRequestMode.authMode === 'basic_auth') {
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    headers.Authorization = `Basic ${credentials}`;
+  }
+
+  const body = buildTokenRequestBody({
+    contentType: tokenRequestMode.contentType,
+    authMode: tokenRequestMode.authMode,
+    refreshTokenCandidate,
+    scopeCandidate,
+    clientId,
+    clientSecret,
+  });
+
+  try {
+    const response = await postWithHttps(url, headers, body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      const contentType = String(response.headers['content-type'] || '');
+      let parsedMessage = '';
+      if (contentType.includes('application/json')) {
+        try {
+          const payload = JSON.parse(response.body);
+          parsedMessage = payload?.error?.message
+            || payload?.error_description
+            || payload?.error_code
+            || payload?.message
+            || '';
+        } catch {
+          parsedMessage = '';
+        }
+      }
+      if (!parsedMessage) {
+        parsedMessage = parseErrorText(response.body) || `HTTP ${response.statusCode}`;
+      }
+      throw new Error(`HTTP ${response.statusCode}: ${parsedMessage}`);
+    }
+
+    let payload = null;
+    try {
+      payload = JSON.parse(response.body);
+    } catch {
+      throw new Error('OAuth token endpoint returned non-JSON success response.');
+    }
+
+    return { payload, error: null };
+  } catch (error) {
+    return {
+      payload: null,
+      error: error instanceof Error ? error.message : 'Unknown OAuth token error',
+    };
+  }
+};
+
+const exchangeRefreshToken = async ({
+  baseUrl,
+  clientId,
+  clientSecret,
+  refreshToken,
+  oauthScopes,
+}) => {
 
   const refreshTokenCandidates = buildRefreshTokenCandidates(refreshToken);
   const baseUrlCandidates = buildBaseUrlCandidates(baseUrl);
+  const scopeCandidates = buildScopeCandidates({
+    configuredScopes: oauthScopes,
+    refreshToken,
+  });
   const failures = [];
 
   for (const oauthBaseUrl of baseUrlCandidates) {
     for (const refreshTokenCandidate of refreshTokenCandidates) {
-      const postResult = await callTokenEndpoint({
-        oauthBaseUrl,
-        useBasicAuth: false,
-        refreshTokenCandidate,
-      });
-      if (postResult.payload) {
-        const accessToken = postResult.payload?.access_token
-          || postResult.payload?.data?.access_token
-          || postResult.payload?.data?.['access-token'];
-        if (!accessToken) throw new Error('OAuth token response missing access token.');
-        return { accessToken, resolvedBaseUrl: oauthBaseUrl };
-      }
+      for (const oauthPath of TOKEN_PATH_CANDIDATES) {
+        for (const scopeCandidate of scopeCandidates) {
+          for (const tokenRequestMode of TOKEN_REQUEST_MODES) {
+            const tokenResult = await callTokenEndpoint({
+              oauthBaseUrl,
+              oauthPath,
+              refreshTokenCandidate,
+              scopeCandidate,
+              tokenRequestMode,
+              clientId,
+              clientSecret,
+            });
 
-      const basicResult = await callTokenEndpoint({
-        oauthBaseUrl,
-        useBasicAuth: true,
-        refreshTokenCandidate,
-      });
-      if (basicResult.payload) {
-        const accessToken = basicResult.payload?.access_token
-          || basicResult.payload?.data?.access_token
-          || basicResult.payload?.data?.['access-token'];
-        if (!accessToken) throw new Error('OAuth token response missing access token.');
-        return { accessToken, resolvedBaseUrl: oauthBaseUrl };
-      }
+            if (tokenResult.payload) {
+              const accessToken = getOAuthPayloadAccessToken(tokenResult.payload);
+              if (!accessToken) throw new Error('OAuth token response missing access token.');
+              return { accessToken, resolvedBaseUrl: oauthBaseUrl };
+            }
 
-      failures.push(
-        `oauth_base=${oauthBaseUrl} token_fp=${fingerprint(refreshTokenCandidate)} `
-        + `post_error=${postResult.error} basic_error=${basicResult.error}`,
-      );
+            failures.push(
+              `oauth_base=${oauthBaseUrl} oauth_path=${oauthPath} mode=${tokenRequestMode.key} `
+              + `scope=${scopeCandidate || '(none)'} token_fp=${fingerprint(refreshTokenCandidate)} `
+              + `error=${tokenResult.error}`,
+            );
+          }
+        }
+      }
     }
   }
 
+  const failurePreview = failures.slice(0, 8).join(' | ');
   throw new Error(
-    `OAuth refresh failed using both client auth modes. `
+    `OAuth refresh failed across all request modes. `
     + `baseUrl=${baseUrl}. attempts=${failures.length}. `
-    + `${failures.join(' | ')}. `
+    + `${failurePreview}. `
     + `client_id_fp=${fingerprint(clientId)} client_id_len=${clientId.length}. `
     + `client_secret_fp=${fingerprint(clientSecret)} client_secret_len=${clientSecret.length}. `
-    + `refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}.`,
+    + `refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}. `
+    + `configured_scope=${oauthScopes || '(none)'}.`,
   );
 };
 
