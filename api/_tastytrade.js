@@ -438,7 +438,9 @@ export const fetchAccountsViaRefreshToken = async () => {
   } catch (error) {
     if (source === 'direct_access_token' && error instanceof Error && error.message.startsWith('HTTP 401')) {
       throw new Error(
-        'TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. Generate a new access token and update this env var.',
+        `TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. `
+        + `Generate a new access token and update this env var. `
+        + `token_fp=${fingerprint(accessToken)} token_len=${accessToken.length}.`,
       );
     }
     throw error;
@@ -508,7 +510,9 @@ export const fetchTransactionsViaRefreshToken = async ({ accountNumber, startDat
   } catch (error) {
     if (source === 'direct_access_token' && error instanceof Error && error.message.startsWith('HTTP 401')) {
       throw new Error(
-        'TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. Generate a new access token and update this env var.',
+        `TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. `
+        + `Generate a new access token and update this env var. `
+        + `token_fp=${fingerprint(accessToken)} token_len=${accessToken.length}.`,
       );
     }
     throw error;
