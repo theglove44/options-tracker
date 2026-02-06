@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 const DEFAULT_BASE_URL = 'https://api.tastytrade.com';
 const MAX_TRANSACTION_PAGES = 200;
 const TRANSACTION_PAGE_SIZE = 2000;
@@ -76,6 +78,8 @@ const loadConfig = () => ({
   refreshToken: requireEnv('TASTYTRADE_REFRESH_TOKEN'),
 });
 
+const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
+
 const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshToken }) => {
   const url = new URL('/oauth/token', baseUrl);
   const callTokenEndpoint = async ({ useBasicAuth }) => {
@@ -125,7 +129,9 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
   if (!basicResult.payload) {
     throw new Error(
       `OAuth refresh failed using both client auth modes. `
-      + `baseUrl=${baseUrl}. post_error=${postResult.error}. basic_error=${basicResult.error}`,
+      + `baseUrl=${baseUrl}. post_error=${postResult.error}. basic_error=${basicResult.error}.`
+      + ` client_id_fp=${fingerprint(clientId)} client_id_len=${clientId.length}.`
+      + ` refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}.`,
     );
   }
 
