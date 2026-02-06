@@ -46,12 +46,27 @@ const requestJson = async (url, options) => {
   return response.json();
 };
 
+const sanitizeEnvValue = (value) => {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+};
+
 const requireEnv = (name) => {
   const value = process.env[name];
   if (!value || !value.trim()) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
-  return value.trim();
+  const normalized = sanitizeEnvValue(value);
+  if (!normalized) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return normalized;
 };
 
 const loadConfig = () => ({
