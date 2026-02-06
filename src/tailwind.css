@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+/* Content scanning configuration - in v4 this is typically handled automatically 
+   or configured through the build tool. With Vite, it should scan src/ by default. */
+
+@theme {
+  /* Custom theme extensions go here */
+  /* For example:
+  --color-brand: #3b82f6;
+  --font-family-display: "Inter", system-ui, sans-serif;
+  */
+}
