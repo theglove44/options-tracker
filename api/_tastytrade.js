@@ -80,12 +80,31 @@ const loadConfig = () => ({
 
 const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
 
+const buildRefreshTokenCandidates = (refreshToken) => {
+  const candidates = new Set([refreshToken]);
+
+  try {
+    const decoded = decodeURIComponent(refreshToken);
+    if (decoded && decoded !== refreshToken) {
+      candidates.add(decoded);
+    }
+  } catch {
+    // keep original only
+  }
+
+  if (refreshToken.includes(' ')) {
+    candidates.add(refreshToken.replace(/ /g, '+'));
+  }
+
+  return [...candidates];
+};
+
 const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshToken }) => {
   const url = new URL('/oauth/token', baseUrl);
-  const callTokenEndpoint = async ({ useBasicAuth }) => {
+  const callTokenEndpoint = async ({ useBasicAuth, refreshTokenCandidate }) => {
     const body = new URLSearchParams();
     body.set('grant_type', 'refresh_token');
-    body.set('refresh_token', refreshToken);
+    body.set('refresh_token', refreshTokenCandidate);
     if (!useBasicAuth) {
       body.set('client_id', clientId);
       body.set('client_secret', clientSecret);
@@ -116,31 +135,41 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
     }
   };
 
-  const postResult = await callTokenEndpoint({ useBasicAuth: false });
-  if (postResult.payload) {
-    const accessToken = postResult.payload?.access_token
-      || postResult.payload?.data?.access_token
-      || postResult.payload?.data?.['access-token'];
-    if (!accessToken) throw new Error('OAuth token response missing access token.');
-    return accessToken;
-  }
+  const refreshTokenCandidates = buildRefreshTokenCandidates(refreshToken);
+  const failures = [];
 
-  const basicResult = await callTokenEndpoint({ useBasicAuth: true });
-  if (!basicResult.payload) {
-    throw new Error(
-      `OAuth refresh failed using both client auth modes. `
-      + `baseUrl=${baseUrl}. post_error=${postResult.error}. basic_error=${basicResult.error}.`
-      + ` client_id_fp=${fingerprint(clientId)} client_id_len=${clientId.length}.`
-      + ` client_secret_fp=${fingerprint(clientSecret)} client_secret_len=${clientSecret.length}.`
-      + ` refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}.`,
+  for (const refreshTokenCandidate of refreshTokenCandidates) {
+    const postResult = await callTokenEndpoint({ useBasicAuth: false, refreshTokenCandidate });
+    if (postResult.payload) {
+      const accessToken = postResult.payload?.access_token
+        || postResult.payload?.data?.access_token
+        || postResult.payload?.data?.['access-token'];
+      if (!accessToken) throw new Error('OAuth token response missing access token.');
+      return accessToken;
+    }
+
+    const basicResult = await callTokenEndpoint({ useBasicAuth: true, refreshTokenCandidate });
+    if (basicResult.payload) {
+      const accessToken = basicResult.payload?.access_token
+        || basicResult.payload?.data?.access_token
+        || basicResult.payload?.data?.['access-token'];
+      if (!accessToken) throw new Error('OAuth token response missing access token.');
+      return accessToken;
+    }
+
+    failures.push(
+      `token_fp=${fingerprint(refreshTokenCandidate)} post_error=${postResult.error} basic_error=${basicResult.error}`,
     );
   }
 
-  const accessToken = basicResult.payload?.access_token
-    || basicResult.payload?.data?.access_token
-    || basicResult.payload?.data?.['access-token'];
-  if (!accessToken) throw new Error('OAuth token response missing access token.');
-  return accessToken;
+  throw new Error(
+    `OAuth refresh failed using both client auth modes. `
+    + `baseUrl=${baseUrl}. attempts=${failures.length}. `
+    + `${failures.join(' | ')}. `
+    + `client_id_fp=${fingerprint(clientId)} client_id_len=${clientId.length}. `
+    + `client_secret_fp=${fingerprint(clientSecret)} client_secret_len=${clientSecret.length}. `
+    + `refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}.`,
+  );
 };
 
 const requestAccountJson = async ({ baseUrl, accessToken, path, params = {} }) => {
