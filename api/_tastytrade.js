@@ -128,7 +128,6 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
     const headers = {
       Accept: 'application/json',
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'options-tracker-vercel/1.0',
     };
 
     if (useBasicAuth) {
@@ -167,7 +166,7 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
           || postResult.payload?.data?.access_token
           || postResult.payload?.data?.['access-token'];
         if (!accessToken) throw new Error('OAuth token response missing access token.');
-        return accessToken;
+        return { accessToken, resolvedBaseUrl: oauthBaseUrl };
       }
 
       const basicResult = await callTokenEndpoint({
@@ -180,7 +179,7 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
           || basicResult.payload?.data?.access_token
           || basicResult.payload?.data?.['access-token'];
         if (!accessToken) throw new Error('OAuth token response missing access token.');
-        return accessToken;
+        return { accessToken, resolvedBaseUrl: oauthBaseUrl };
       }
 
       failures.push(
@@ -218,9 +217,9 @@ const requestAccountJson = async ({ baseUrl, accessToken, path, params = {} }) =
 
 export const fetchAccountsViaRefreshToken = async () => {
   const config = loadConfig();
-  const accessToken = await exchangeRefreshToken(config);
+  const { accessToken, resolvedBaseUrl } = await exchangeRefreshToken(config);
   const payload = await requestAccountJson({
-    baseUrl: config.baseUrl,
+    baseUrl: resolvedBaseUrl,
     accessToken,
     path: '/customers/me/accounts',
   });
@@ -245,13 +244,13 @@ export const fetchTransactionsViaRefreshToken = async ({ accountNumber, startDat
   if (!accountNumber) throw new Error('accountNumber is required.');
 
   const config = loadConfig();
-  const accessToken = await exchangeRefreshToken(config);
+  const { accessToken, resolvedBaseUrl } = await exchangeRefreshToken(config);
   const items = [];
   let pageOffset = 0;
 
   for (let page = 0; page < MAX_TRANSACTION_PAGES; page += 1) {
     const payload = await requestAccountJson({
-      baseUrl: config.baseUrl,
+      baseUrl: resolvedBaseUrl,
       accessToken,
       path: `/accounts/${encodeURIComponent(accountNumber)}/transactions`,
       params: {
