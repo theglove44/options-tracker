@@ -131,6 +131,7 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
       `OAuth refresh failed using both client auth modes. `
       + `baseUrl=${baseUrl}. post_error=${postResult.error}. basic_error=${basicResult.error}.`
       + ` client_id_fp=${fingerprint(clientId)} client_id_len=${clientId.length}.`
+      + ` client_secret_fp=${fingerprint(clientSecret)} client_secret_len=${clientSecret.length}.`
       + ` refresh_fp=${fingerprint(refreshToken)} refresh_len=${refreshToken.length}.`,
     );
   }
