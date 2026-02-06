@@ -101,6 +101,13 @@ const sanitizeEnvValue = (value) => {
   return trimmed;
 };
 
+const readOptionalEnv = (name) => {
+  const value = process.env[name];
+  if (!value || !value.trim()) return undefined;
+  const normalized = sanitizeEnvValue(value);
+  return normalized || undefined;
+};
+
 const requireEnv = (name) => {
   const value = process.env[name];
   if (!value || !value.trim()) {
@@ -140,13 +147,31 @@ const parseJwtPayload = (token) => {
   }
 };
 
-const loadConfig = () => ({
-  baseUrl: normalizeBaseUrl(process.env.TASTYTRADE_API_BASE_URL),
-  clientId: requireEnv('TASTYTRADE_CLIENT_ID'),
-  clientSecret: requireEnv('TASTYTRADE_CLIENT_SECRET'),
-  refreshToken: requireEnv('TASTYTRADE_REFRESH_TOKEN'),
-  oauthScopes: normalizeScopeValue(process.env.TASTYTRADE_OAUTH_SCOPES || ''),
-});
+const loadConfig = () => {
+  const baseUrl = normalizeBaseUrl(process.env.TASTYTRADE_API_BASE_URL);
+  const accessToken = readOptionalEnv('TASTYTRADE_ACCESS_TOKEN');
+  const oauthScopes = normalizeScopeValue(process.env.TASTYTRADE_OAUTH_SCOPES || '');
+
+  if (accessToken) {
+    return {
+      baseUrl,
+      accessToken,
+      oauthScopes,
+      clientId: undefined,
+      clientSecret: undefined,
+      refreshToken: undefined,
+    };
+  }
+
+  return {
+    baseUrl,
+    clientId: requireEnv('TASTYTRADE_CLIENT_ID'),
+    clientSecret: requireEnv('TASTYTRADE_CLIENT_SECRET'),
+    refreshToken: requireEnv('TASTYTRADE_REFRESH_TOKEN'),
+    accessToken: undefined,
+    oauthScopes,
+  };
+};
 
 const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
 
@@ -363,6 +388,27 @@ const exchangeRefreshToken = async ({
   );
 };
 
+const resolveAccessToken = async (config) => {
+  if (config.accessToken) {
+    return {
+      accessToken: config.accessToken,
+      resolvedBaseUrl: config.baseUrl,
+      source: 'direct_access_token',
+    };
+  }
+
+  return {
+    ...(await exchangeRefreshToken({
+      baseUrl: config.baseUrl,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      refreshToken: config.refreshToken,
+      oauthScopes: config.oauthScopes,
+    })),
+    source: 'oauth_refresh',
+  };
+};
+
 const requestAccountJson = async ({ baseUrl, accessToken, path, params = {} }) => {
   const url = new URL(path, baseUrl);
   Object.entries(params).forEach(([key, value]) => {
@@ -381,12 +427,22 @@ const requestAccountJson = async ({ baseUrl, accessToken, path, params = {} }) =
 
 export const fetchAccountsViaRefreshToken = async () => {
   const config = loadConfig();
-  const { accessToken, resolvedBaseUrl } = await exchangeRefreshToken(config);
-  const payload = await requestAccountJson({
-    baseUrl: resolvedBaseUrl,
-    accessToken,
-    path: '/customers/me/accounts',
-  });
+  const { accessToken, resolvedBaseUrl, source } = await resolveAccessToken(config);
+  let payload;
+  try {
+    payload = await requestAccountJson({
+      baseUrl: resolvedBaseUrl,
+      accessToken,
+      path: '/customers/me/accounts',
+    });
+  } catch (error) {
+    if (source === 'direct_access_token' && error instanceof Error && error.message.startsWith('HTTP 401')) {
+      throw new Error(
+        'TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. Generate a new access token and update this env var.',
+      );
+    }
+    throw error;
+  }
 
   return extractItems(payload)
     .map((item) => ({
@@ -408,45 +464,54 @@ export const fetchTransactionsViaRefreshToken = async ({ accountNumber, startDat
   if (!accountNumber) throw new Error('accountNumber is required.');
 
   const config = loadConfig();
-  const { accessToken, resolvedBaseUrl } = await exchangeRefreshToken(config);
+  const { accessToken, resolvedBaseUrl, source } = await resolveAccessToken(config);
   const items = [];
   let pageOffset = 0;
 
-  for (let page = 0; page < MAX_TRANSACTION_PAGES; page += 1) {
-    const payload = await requestAccountJson({
-      baseUrl: resolvedBaseUrl,
-      accessToken,
-      path: `/accounts/${encodeURIComponent(accountNumber)}/transactions`,
-      params: {
-        sort: 'Asc',
-        'per-page': TRANSACTION_PAGE_SIZE,
-        'page-offset': pageOffset,
-        'start-date': startDate,
-        'end-date': endDate,
-      },
-    });
+  try {
+    for (let page = 0; page < MAX_TRANSACTION_PAGES; page += 1) {
+      const payload = await requestAccountJson({
+        baseUrl: resolvedBaseUrl,
+        accessToken,
+        path: `/accounts/${encodeURIComponent(accountNumber)}/transactions`,
+        params: {
+          sort: 'Asc',
+          'per-page': TRANSACTION_PAGE_SIZE,
+          'page-offset': pageOffset,
+          'start-date': startDate,
+          'end-date': endDate,
+        },
+      });
 
-    const batch = extractItems(payload);
-    items.push(...batch);
+      const batch = extractItems(payload);
+      items.push(...batch);
 
-    const pagination = extractPagination(payload);
-    const totalPages = Number(pagination?.['total-pages'] ?? pagination?.totalPages);
-    const hasTotalPages = Number.isFinite(totalPages) && totalPages > 0;
-    const hasNextLink = Boolean(pagination?.['next-link'] || pagination?.nextLink);
+      const pagination = extractPagination(payload);
+      const totalPages = Number(pagination?.['total-pages'] ?? pagination?.totalPages);
+      const hasTotalPages = Number.isFinite(totalPages) && totalPages > 0;
+      const hasNextLink = Boolean(pagination?.['next-link'] || pagination?.nextLink);
 
-    if (hasTotalPages) {
-      if (pageOffset + 1 >= totalPages) break;
+      if (hasTotalPages) {
+        if (pageOffset + 1 >= totalPages) break;
+        pageOffset += 1;
+        continue;
+      }
+
+      if (hasNextLink) {
+        pageOffset += 1;
+        continue;
+      }
+
+      if (batch.length < TRANSACTION_PAGE_SIZE) break;
       pageOffset += 1;
-      continue;
     }
-
-    if (hasNextLink) {
-      pageOffset += 1;
-      continue;
+  } catch (error) {
+    if (source === 'direct_access_token' && error instanceof Error && error.message.startsWith('HTTP 401')) {
+      throw new Error(
+        'TASTYTRADE_ACCESS_TOKEN is unauthorized or expired. Generate a new access token and update this env var.',
+      );
     }
-
-    if (batch.length < TRANSACTION_PAGE_SIZE) break;
-    pageOffset += 1;
+    throw error;
   }
 
   return items;
