@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import https from 'node:https';
 
 const DEFAULT_BASE_URL = 'https://api.tastytrade.com';
 const MAX_TRANSACTION_PAGES = 200;
@@ -47,6 +48,40 @@ const requestJson = async (url, options) => {
   }
   return response.json();
 };
+
+const parseErrorText = (text = '') => {
+  if (!text) return '';
+  const titleMatch = text.match(/<title>([^<]+)<\/title>/i);
+  const h1Match = text.match(/<h1>([^<]+)<\/h1>/i);
+  return (titleMatch?.[1] || h1Match?.[1] || text).trim();
+};
+
+const postFormWithHttps = async (url, headers, body) => new Promise((resolve, reject) => {
+  const request = https.request(url, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      'Content-Length': Buffer.byteLength(body),
+      Connection: 'close',
+    },
+  }, (response) => {
+    let responseBody = '';
+    response.on('data', (chunk) => {
+      responseBody += chunk;
+    });
+    response.on('end', () => {
+      resolve({
+        statusCode: response.statusCode || 0,
+        headers: response.headers || {},
+        body: responseBody,
+      });
+    });
+  });
+
+  request.on('error', (error) => reject(error));
+  request.write(body);
+  request.end();
+});
 
 const sanitizeEnvValue = (value) => {
   const trimmed = value.trim();
@@ -136,11 +171,35 @@ const exchangeRefreshToken = async ({ baseUrl, clientId, clientSecret, refreshTo
     }
 
     try {
-      const payload = await requestJson(url.toString(), {
-        method: 'POST',
-        headers,
-        body: body.toString(),
-      });
+      const response = await postFormWithHttps(url, headers, body.toString());
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        const contentType = String(response.headers['content-type'] || '');
+        let parsedMessage = '';
+        if (contentType.includes('application/json')) {
+          try {
+            const payload = JSON.parse(response.body);
+            parsedMessage = payload?.error?.message
+              || payload?.error_description
+              || payload?.error_code
+              || payload?.message
+              || '';
+          } catch {
+            parsedMessage = '';
+          }
+        }
+        if (!parsedMessage) {
+          parsedMessage = parseErrorText(response.body) || `HTTP ${response.statusCode}`;
+        }
+        throw new Error(`HTTP ${response.statusCode}: ${parsedMessage}`);
+      }
+
+      let payload = null;
+      try {
+        payload = JSON.parse(response.body);
+      } catch {
+        throw new Error('OAuth token endpoint returned non-JSON success response.');
+      }
+
       return { payload, error: null };
     } catch (error) {
       return {
