@@ -44,4 +44,32 @@ The imported transactions are converted to the same internal row schema as the C
 ## Local Development with API Routes
 
 - `npm run dev` runs the Vite frontend only (CSV flow works, API routes do not).
-- Use `vercel dev` to run both frontend and `/api/*` functions locally with env vars loaded.
+- `npm run dev:local` runs both frontend and `/api/*` functions locally via Vercel CLI.
+
+### Local Run (No Hosted Vercel Required)
+
+1. Export your OAuth credentials in the same shell:
+
+```bash
+export TASTYTRADE_REFRESH_TOKEN=...
+export TASTYTRADE_CLIENT_ID=...
+export TASTYTRADE_CLIENT_SECRET=...
+```
+
+2. Generate a short-lived access token:
+
+```bash
+export TASTYTRADE_ACCESS_TOKEN="$(npm run -s token:access)"
+```
+
+3. Start the app locally with API routes:
+
+```bash
+npm run dev:local
+```
+
+4. Open the local URL shown in the terminal and use `Load Accounts` / `Import Transactions from API`.
+
+Notes:
+- `TASTYTRADE_ACCESS_TOKEN` expires quickly. Re-run step 2 when API calls start returning unauthorized.
+- You can still use CSV upload anytime if API auth is unavailable.

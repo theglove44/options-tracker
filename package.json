@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "npx --yes vercel dev",
+    "token:access": "bash scripts/get-access-token.sh",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
