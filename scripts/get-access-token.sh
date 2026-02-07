@@ -6,6 +6,22 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "$ROOT_DIR/.env" ]]; then
+  # shellcheck disable=SC1090
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
+if [[ -f "$ROOT_DIR/.env.local" ]]; then
+  # shellcheck disable=SC1090
+  set -a
+  source "$ROOT_DIR/.env.local"
+  set +a
+fi
+
 required_vars=(
   TASTYTRADE_REFRESH_TOKEN
   TASTYTRADE_CLIENT_ID

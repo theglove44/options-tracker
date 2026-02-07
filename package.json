@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:local": "npx --yes vercel dev",
+    "dev:local": "bash scripts/dev-local.sh",
+    "api:local": "node scripts/local-api-server.mjs",
     "token:access": "bash scripts/get-access-token.sh",
     "build": "vite build",
     "lint": "eslint .",

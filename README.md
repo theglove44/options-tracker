@@ -44,21 +44,25 @@ The imported transactions are converted to the same internal row schema as the C
 ## Local Development with API Routes
 
 - `npm run dev` runs the Vite frontend only (CSV flow works, API routes do not).
-- `npm run dev:local` runs both frontend and `/api/*` functions locally via Vercel CLI.
+- `npm run dev:local` runs frontend + local API routes (no Vercel auth required).
 
 ### Local Run (No Hosted Vercel Required)
 
-1. Export your OAuth credentials in the same shell:
+1. Create `.env` (or `.env.local`) in the project root:
 
 ```bash
-export TASTYTRADE_REFRESH_TOKEN=...
-export TASTYTRADE_CLIENT_ID=...
-export TASTYTRADE_CLIENT_SECRET=...
+TASTYTRADE_REFRESH_TOKEN=...
+TASTYTRADE_CLIENT_ID=...
+TASTYTRADE_CLIENT_SECRET=...
+TASTYTRADE_API_BASE_URL=https://api.tastytrade.com
+# Optional: prefill account input in UI
+VITE_TASTYTRADE_ACCOUNT_NUMBER=5WT00001
 ```
 
-2. Generate a short-lived access token:
+2. Optionally generate a short-lived access token (useful when refresh flow is unstable):
 
 ```bash
+npm run -s token:access
 export TASTYTRADE_ACCESS_TOKEN="$(npm run -s token:access)"
 ```
 
@@ -72,4 +76,5 @@ npm run dev:local
 
 Notes:
 - `TASTYTRADE_ACCESS_TOKEN` expires quickly. Re-run step 2 when API calls start returning unauthorized.
+- `.env` and `.env.local` are ignored by git.
 - You can still use CSV upload anytime if API auth is unavailable.
