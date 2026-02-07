@@ -5,12 +5,10 @@ import TastytradeClient from '@tastytrade/api';
 const DEFAULT_BASE_URL = 'https://api.tastytrade.com';
 const MAX_TRANSACTION_PAGES = 200;
 const TRANSACTION_PAGE_SIZE = 2000;
-const TOKEN_PATH_CANDIDATES = ['/oauth/token', '/oauth2/token'];
+const USER_AGENT = 'options-tracker/1.0';
+const TOKEN_PATH_CANDIDATES = ['/oauth/token'];
 const TOKEN_REQUEST_MODES = [
-  { key: 'json_with_client', contentType: 'application/json', authMode: 'body_client_and_secret' },
-  { key: 'json_secret_only', contentType: 'application/json', authMode: 'body_secret_only' },
   { key: 'form_with_client', contentType: 'application/x-www-form-urlencoded', authMode: 'body_client_and_secret' },
-  { key: 'form_basic_auth', contentType: 'application/x-www-form-urlencoded', authMode: 'basic_auth' },
 ];
 
 const normalizeBaseUrl = (baseUrl) => (baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -45,7 +43,14 @@ const parseApiError = async (response) => {
 };
 
 const requestJson = async (url, options) => {
-  const response = await fetch(url, options);
+  const mergedOptions = {
+    ...options,
+    headers: {
+      'User-Agent': USER_AGENT,
+      ...options?.headers,
+    },
+  };
+  const response = await fetch(url, mergedOptions);
   if (!response.ok) {
     const parsedMessage = await parseApiError(response);
     throw new Error(`HTTP ${response.status}: ${parsedMessage}`);
@@ -69,6 +74,7 @@ const postWithHttps = async (url, headers, body) => new Promise((resolve, reject
     method: 'POST',
     headers: {
       ...headers,
+      'User-Agent': USER_AGENT,
       'Content-Length': Buffer.byteLength(body),
       Connection: 'close',
     },
@@ -191,39 +197,6 @@ const loadConfig = () => {
 
 const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
 
-const buildRefreshTokenCandidates = (refreshToken) => {
-  const candidates = new Set([refreshToken]);
-
-  try {
-    const decoded = decodeURIComponent(refreshToken);
-    if (decoded && decoded !== refreshToken) {
-      candidates.add(decoded);
-    }
-  } catch {
-    // keep original only
-  }
-
-  if (refreshToken.includes(' ')) {
-    candidates.add(refreshToken.replace(/ /g, '+'));
-  }
-
-  return [...candidates];
-};
-
-const buildBaseUrlCandidates = (configuredBaseUrl) => {
-  const normalizedConfigured = normalizeBaseUrl(configuredBaseUrl);
-  const candidates = new Set([normalizedConfigured]);
-
-  if (normalizedConfigured.includes('api.tastytrade.com')) {
-    candidates.add('https://api.tastyworks.com');
-  }
-
-  if (normalizedConfigured.includes('api.tastyworks.com')) {
-    candidates.add('https://api.tastytrade.com');
-  }
-
-  return [...candidates];
-};
 
 const buildScopeCandidates = ({ configuredScopes, refreshToken }) => {
   const candidates = new Set();
@@ -259,7 +232,7 @@ const exchangeRefreshTokenWithSdk = async ({
   refreshToken,
   oauthScopes,
 }) => {
-  const baseUrlCandidates = buildBaseUrlCandidates(baseUrl);
+  const baseUrlCandidates = [normalizeBaseUrl(baseUrl)];
   const scopeCandidates = buildScopeCandidates({
     configuredScopes: oauthScopes,
     refreshToken,
@@ -413,8 +386,8 @@ const exchangeRefreshToken = async ({
   oauthScopes,
 }) => {
 
-  const refreshTokenCandidates = buildRefreshTokenCandidates(refreshToken);
-  const baseUrlCandidates = buildBaseUrlCandidates(baseUrl);
+  const refreshTokenCandidates = [refreshToken];
+  const baseUrlCandidates = [normalizeBaseUrl(baseUrl)];
   const scopeCandidates = buildScopeCandidates({
     configuredScopes: oauthScopes,
     refreshToken,

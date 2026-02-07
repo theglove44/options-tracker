@@ -148,6 +148,35 @@ src/
 └── tailwind.css      # Tailwind directives
 ```
 
+## TastyTrade API Authentication
+
+### Critical: User-Agent Header Required
+TastyTrade's nginx proxy returns `401 Authorization Required` for **any** request missing a `User-Agent` header. This affects Node.js `fetch` and `https.request` which don't set one by default (unlike `curl` or `axios`). The 401 comes from nginx before reaching the API, making it look like an invalid token error.
+
+All HTTP requests in `api/_tastytrade.js` include `User-Agent: options-tracker/1.0` via the `USER_AGENT` constant.
+
+### OAuth Token Exchange
+- **Endpoint:** `POST https://api.tastytrade.com/oauth/token`
+- **Content-Type:** `application/x-www-form-urlencoded`
+- **Body params:** `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret`
+- **Access tokens expire in 900 seconds (15 min)**
+
+### Auth Flow
+1. `resolveAccessToken()` first tries the `@tastytrade/api` SDK (uses axios, sets User-Agent automatically)
+2. Falls back to manual OAuth via `postWithHttps` (sets User-Agent explicitly)
+3. Last resort: static `TASTYTRADE_ACCESS_TOKEN` env var (short-lived, dev-only)
+
+### Required Environment Variables
+```
+TASTYTRADE_REFRESH_TOKEN=<jwt refresh token>
+TASTYTRADE_CLIENT_ID=<uuid>
+TASTYTRADE_CLIENT_SECRET=<hex string>
+TASTYTRADE_API_BASE_URL=https://api.tastytrade.com
+```
+
+### SDK Note
+The `@tastytrade/api` SDK's `ProdConfig.baseUrl` is `https://api.tastyworks.com` (old domain). The code overrides this with the configured `TASTYTRADE_API_BASE_URL`.
+
 ## Testing & Validation
 
 - `repro_issue.js` and `verify_metrics.js` in project root (utility scripts, not part of build)
