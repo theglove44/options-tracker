@@ -151,27 +151,42 @@ const parseJwtPayload = (token) => {
 const loadConfig = () => {
   const baseUrl = normalizeBaseUrl(process.env.TASTYTRADE_API_BASE_URL);
   const accessToken = readOptionalEnv('TASTYTRADE_ACCESS_TOKEN');
+  const clientId = readOptionalEnv('TASTYTRADE_CLIENT_ID');
+  const clientSecret = readOptionalEnv('TASTYTRADE_CLIENT_SECRET');
+  const refreshToken = readOptionalEnv('TASTYTRADE_REFRESH_TOKEN');
   const oauthScopes = normalizeScopeValue(process.env.TASTYTRADE_OAUTH_SCOPES || '');
+  const hasRefreshCredentials = Boolean(clientId && clientSecret && refreshToken);
+
+  // Prefer refresh-token auth when available. Access token is fallback only.
+  if (hasRefreshCredentials) {
+    return {
+      baseUrl,
+      accessToken,
+      clientId,
+      clientSecret,
+      refreshToken,
+      oauthScopes,
+    };
+  }
 
   if (accessToken) {
     return {
       baseUrl,
       accessToken,
-      oauthScopes,
       clientId: undefined,
       clientSecret: undefined,
       refreshToken: undefined,
+      oauthScopes,
     };
   }
 
-  return {
-    baseUrl,
-    clientId: requireEnv('TASTYTRADE_CLIENT_ID'),
-    clientSecret: requireEnv('TASTYTRADE_CLIENT_SECRET'),
-    refreshToken: requireEnv('TASTYTRADE_REFRESH_TOKEN'),
-    accessToken: undefined,
-    oauthScopes,
-  };
+  // Surface clear errors when no auth method is fully configured.
+  requireEnv('TASTYTRADE_CLIENT_ID');
+  requireEnv('TASTYTRADE_CLIENT_SECRET');
+  requireEnv('TASTYTRADE_REFRESH_TOKEN');
+  throw new Error(
+    'Missing auth configuration. Set refresh-token credentials or set TASTYTRADE_ACCESS_TOKEN.',
+  );
 };
 
 const fingerprint = (value) => createHash('sha256').update(value).digest('hex').slice(0, 12);
@@ -451,6 +466,39 @@ const exchangeRefreshToken = async ({
 };
 
 const resolveAccessToken = async (config) => {
+  if (config.clientSecret && config.refreshToken) {
+    try {
+      return {
+        ...(await exchangeRefreshTokenWithSdk({
+          baseUrl: config.baseUrl,
+          clientSecret: config.clientSecret,
+          refreshToken: config.refreshToken,
+          oauthScopes: config.oauthScopes,
+        })),
+        source: 'oauth_refresh_sdk',
+      };
+    } catch (sdkError) {
+      try {
+        return {
+          ...(await exchangeRefreshToken({
+            baseUrl: config.baseUrl,
+            clientId: config.clientId,
+            clientSecret: config.clientSecret,
+            refreshToken: config.refreshToken,
+            oauthScopes: config.oauthScopes,
+          })),
+          source: 'oauth_refresh',
+        };
+      } catch (fallbackError) {
+        const sdkMessage = sdkError instanceof Error ? sdkError.message : 'Unknown SDK refresh error';
+        const fallbackMessage = fallbackError instanceof Error
+          ? fallbackError.message
+          : 'Unknown fallback refresh error';
+        throw new Error(`OAuth refresh failed. sdk_error=${sdkMessage} fallback_error=${fallbackMessage}`);
+      }
+    }
+  }
+
   if (config.accessToken) {
     return {
       accessToken: config.accessToken,
@@ -459,36 +507,7 @@ const resolveAccessToken = async (config) => {
     };
   }
 
-  try {
-    return {
-      ...(await exchangeRefreshTokenWithSdk({
-        baseUrl: config.baseUrl,
-        clientSecret: config.clientSecret,
-        refreshToken: config.refreshToken,
-        oauthScopes: config.oauthScopes,
-      })),
-      source: 'oauth_refresh_sdk',
-    };
-  } catch (sdkError) {
-    try {
-      return {
-        ...(await exchangeRefreshToken({
-          baseUrl: config.baseUrl,
-          clientId: config.clientId,
-          clientSecret: config.clientSecret,
-          refreshToken: config.refreshToken,
-          oauthScopes: config.oauthScopes,
-        })),
-        source: 'oauth_refresh',
-      };
-    } catch (fallbackError) {
-      const sdkMessage = sdkError instanceof Error ? sdkError.message : 'Unknown SDK refresh error';
-      const fallbackMessage = fallbackError instanceof Error
-        ? fallbackError.message
-        : 'Unknown fallback refresh error';
-      throw new Error(`OAuth refresh failed. sdk_error=${sdkMessage} fallback_error=${fallbackMessage}`);
-    }
-  }
+  throw new Error('No authentication method available. Configure refresh credentials or access token.');
 };
 
 const requestAccountJson = async ({ baseUrl, accessToken, path, params = {} }) => {
