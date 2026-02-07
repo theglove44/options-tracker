@@ -20,14 +20,16 @@ if [[ -f ".env.local" ]]; then
   set +a
 fi
 
-# For local development, prefer a direct access token generated via curl.
-# This bypasses the refresh exchange path that has been flaky in server code.
-if [[ -z "${TASTYTRADE_ACCESS_TOKEN:-}" && -n "${TASTYTRADE_REFRESH_TOKEN:-}" && -n "${TASTYTRADE_CLIENT_ID:-}" && -n "${TASTYTRADE_CLIENT_SECRET:-}" ]]; then
+# For local development, always prefer a freshly generated access token when
+# refresh credentials are available. This avoids stale token failures.
+if [[ -n "${TASTYTRADE_REFRESH_TOKEN:-}" && -n "${TASTYTRADE_CLIENT_ID:-}" && -n "${TASTYTRADE_CLIENT_SECRET:-}" ]]; then
   if GENERATED_ACCESS_TOKEN="$(bash scripts/get-access-token.sh 2>/dev/null)"; then
     export TASTYTRADE_ACCESS_TOKEN="$GENERATED_ACCESS_TOKEN"
-    echo "[local-api] generated TASTYTRADE_ACCESS_TOKEN from refresh token"
+    echo "[local-api] refreshed TASTYTRADE_ACCESS_TOKEN from refresh token"
+  elif [[ -n "${TASTYTRADE_ACCESS_TOKEN:-}" ]]; then
+    echo "[local-api] token refresh failed, keeping existing TASTYTRADE_ACCESS_TOKEN"
   else
-    echo "[local-api] could not auto-generate TASTYTRADE_ACCESS_TOKEN; falling back to refresh flow"
+    echo "[local-api] token refresh failed and no TASTYTRADE_ACCESS_TOKEN is set"
   fi
 fi
 
