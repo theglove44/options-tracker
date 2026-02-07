@@ -76,5 +76,6 @@ npm run dev:local
 
 Notes:
 - `TASTYTRADE_ACCESS_TOKEN` expires quickly. Re-run step 2 when API calls start returning unauthorized.
+- `npm run dev:local` will auto-generate `TASTYTRADE_ACCESS_TOKEN` from refresh credentials when possible.
 - `.env` and `.env.local` are ignored by git.
 - You can still use CSV upload anytime if API auth is unavailable.

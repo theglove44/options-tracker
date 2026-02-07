@@ -20,6 +20,17 @@ if [[ -f ".env.local" ]]; then
   set +a
 fi
 
+# For local development, prefer a direct access token generated via curl.
+# This bypasses the refresh exchange path that has been flaky in server code.
+if [[ -z "${TASTYTRADE_ACCESS_TOKEN:-}" && -n "${TASTYTRADE_REFRESH_TOKEN:-}" && -n "${TASTYTRADE_CLIENT_ID:-}" && -n "${TASTYTRADE_CLIENT_SECRET:-}" ]]; then
+  if GENERATED_ACCESS_TOKEN="$(bash scripts/get-access-token.sh 2>/dev/null)"; then
+    export TASTYTRADE_ACCESS_TOKEN="$GENERATED_ACCESS_TOKEN"
+    echo "[local-api] generated TASTYTRADE_ACCESS_TOKEN from refresh token"
+  else
+    echo "[local-api] could not auto-generate TASTYTRADE_ACCESS_TOKEN; falling back to refresh flow"
+  fi
+fi
+
 node scripts/local-api-server.mjs &
 API_PID=$!
 
