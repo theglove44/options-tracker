@@ -457,7 +457,12 @@ export default function App() {
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload?.error || `Request failed with status ${response.status}`);
+      // Handle error whether it's a string or an object
+      const errorValue = payload?.error;
+      const errorMessage = typeof errorValue === 'string'
+        ? errorValue
+        : errorValue?.message || JSON.stringify(errorValue) || `Request failed with status ${response.status}`;
+      throw new Error(errorMessage);
     }
     return payload;
   };
