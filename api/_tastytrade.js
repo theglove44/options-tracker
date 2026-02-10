@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import https from 'node:https';
-import TastytradeClient from '@tastytrade/api';
+// NOTE: @tastytrade/api SDK removed - its @dxfeed/dxlink-api dependency
+// doesn't bundle correctly for Vercel serverless. Using raw HTTPS instead.
 
 const DEFAULT_BASE_URL = 'https://api.tastytrade.com';
 const MAX_TRANSACTION_PAGES = 200;
@@ -210,66 +211,7 @@ const buildScopeCandidates = ({ configuredScopes, refreshToken }) => {
   return [...candidates];
 };
 
-const scopesFromCandidate = (scopeCandidate) => {
-  const parsed = normalizeScopeValue(scopeCandidate || '');
-  if (!parsed) return ['read', 'trade', 'openid'];
-  return parsed.split(' ').filter(Boolean);
-};
-
-const parseSdkError = (error) => {
-  const responseData = error?.response?.data;
-  if (responseData?.error_description) return responseData.error_description;
-  if (responseData?.error?.message) return responseData.error.message;
-  if (responseData?.error_code) return responseData.error_code;
-  if (responseData?.message) return responseData.message;
-  if (error instanceof Error && error.message) return error.message;
-  return 'Unknown SDK OAuth error';
-};
-
-const exchangeRefreshTokenWithSdk = async ({
-  baseUrl,
-  clientSecret,
-  refreshToken,
-  oauthScopes,
-}) => {
-  const baseUrlCandidates = [normalizeBaseUrl(baseUrl)];
-  const scopeCandidates = buildScopeCandidates({
-    configuredScopes: oauthScopes,
-    refreshToken,
-  });
-  const failures = [];
-
-  for (const candidateBaseUrl of baseUrlCandidates) {
-    for (const scopeCandidate of scopeCandidates) {
-      const oauthScopesArray = scopesFromCandidate(scopeCandidate);
-      try {
-        const client = new TastytradeClient({
-          ...TastytradeClient.ProdConfig,
-          baseUrl: candidateBaseUrl,
-          clientSecret,
-          refreshToken,
-          oauthScopes: oauthScopesArray,
-        });
-        await client.httpClient.generateAccessToken();
-        const accessToken = client.accessToken?.token || '';
-        if (!accessToken) {
-          throw new Error('SDK refresh returned empty access token');
-        }
-        return { accessToken, resolvedBaseUrl: candidateBaseUrl };
-      } catch (error) {
-        failures.push(
-          `oauth_base=${candidateBaseUrl} scope=${oauthScopesArray.join(' ')} `
-          + `token_fp=${fingerprint(refreshToken)} error=${parseSdkError(error)}`,
-        );
-      }
-    }
-  }
-
-  const failurePreview = failures.slice(0, 6).join(' | ');
-  throw new Error(
-    `SDK OAuth refresh failed. baseUrl=${baseUrl}. attempts=${failures.length}. ${failurePreview}.`,
-  );
-};
+// SDK-based OAuth removed - using raw HTTPS approach only
 
 const getOAuthPayloadAccessToken = (payload) => payload?.access_token
   || payload?.data?.access_token
@@ -440,36 +382,17 @@ const exchangeRefreshToken = async ({
 
 const resolveAccessToken = async (config) => {
   if (config.clientSecret && config.refreshToken) {
-    try {
-      return {
-        ...(await exchangeRefreshTokenWithSdk({
-          baseUrl: config.baseUrl,
-          clientSecret: config.clientSecret,
-          refreshToken: config.refreshToken,
-          oauthScopes: config.oauthScopes,
-        })),
-        source: 'oauth_refresh_sdk',
-      };
-    } catch (sdkError) {
-      try {
-        return {
-          ...(await exchangeRefreshToken({
-            baseUrl: config.baseUrl,
-            clientId: config.clientId,
-            clientSecret: config.clientSecret,
-            refreshToken: config.refreshToken,
-            oauthScopes: config.oauthScopes,
-          })),
-          source: 'oauth_refresh',
-        };
-      } catch (fallbackError) {
-        const sdkMessage = sdkError instanceof Error ? sdkError.message : 'Unknown SDK refresh error';
-        const fallbackMessage = fallbackError instanceof Error
-          ? fallbackError.message
-          : 'Unknown fallback refresh error';
-        throw new Error(`OAuth refresh failed. sdk_error=${sdkMessage} fallback_error=${fallbackMessage}`);
-      }
-    }
+    // Use raw HTTPS OAuth flow (SDK removed due to Vercel bundling issues)
+    return {
+      ...(await exchangeRefreshToken({
+        baseUrl: config.baseUrl,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        refreshToken: config.refreshToken,
+        oauthScopes: config.oauthScopes,
+      })),
+      source: 'oauth_refresh',
+    };
   }
 
   if (config.accessToken) {
